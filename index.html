@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Scanner PDF HP</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <h2>Scanner PDF Smartphone</h2>
+
+    <video id="video" autoplay playsinline></video>
+
+    <div class="buttons">
+      <button onclick="switchCamera()">🔄 Kamera</button>
+      <button onclick="takePhoto()">📸 Ambil</button>
+      <button onclick="downloadPDF()">📄 Download PDF</button>
+    </div>
+
+    <h3>Hasil Scan</h3>
+    <div id="preview"></div>
+
+    <canvas id="canvas" hidden></canvas>
+
+    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>
