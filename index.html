@@ -1,28 +1,188 @@
 <!DOCTYPE html>
 <html lang="id">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Scanner PDF HP</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="style.css" />
-  </head>
-  <body>
-    <h2>Scanner PDF Smartphone</h2>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Filter Scanner</title>
+<style>
+body { font-family:sans-serif; margin:0; padding:0; text-align:center; background:#f0f0f0; }
+#videoContainer { position:relative; width:100%; max-height:60vh; overflow:hidden; }
+video { width:100%; object-fit:cover; }
+#controls, #filters { display:flex; justify-content:center; flex-wrap:wrap; margin:10px 0; gap:10px; }
+#controls button, #filters button { padding:10px 15px; font-size:16px; border:none; border-radius:6px; cursor:pointer; }
+#controls button { background:#4CAF50; color:white; }
+#filters button { background:#2196F3; color:white; }
+#preview { display:flex; overflow-x:auto; padding:10px; gap:10px; margin:0 5px; background:white; border-radius:6px; }
+.card { position:relative; flex:0 0 auto; }
+.card img { width:80px; border-radius:6px; border:1px solid #ccc; cursor:grab; }
+.card button { position:absolute; top:-5px; right:-5px; background:red; color:white; border:none; border-radius:50%; width:20px; height:20px; cursor:pointer; font-weight:bold; }
+</style>
+</head>
+<body>
 
-    <video id="video" autoplay playsinline></video>
+<div id="videoContainer">
+  <video id="video" autoplay playsinline></video>
+</div>
 
-    <div class="buttons">
-      <button onclick="switchCamera()">🔄 Kamera</button>
-      <button onclick="takePhoto()">📸 Ambil</button>
-      <button onclick="downloadPDF()">📄 Download PDF</button>
-    </div>
+<div id="controls">
+  <button onclick="switchCamera()">🔄 Kamera</button>
+  <button onclick="takePhoto()">📸 Ambil</button>
+  <button onclick="downloadPDF()">📄 PDF</button>
+</div>
 
-    <h3>Hasil Scan</h3>
-    <div id="preview"></div>
+<div id="filters">
+  <button onclick="setFilter('none')">Normal</button>
+  <button onclick="setFilter('grayscale')">Grayscale</button>
+  <button onclick="setFilter('bw')">B/W</button>
+  <button onclick="setFilter('bright')">Bright</button>
+</div>
 
-    <canvas id="canvas" hidden></canvas>
+<div id="preview"></div>
+<canvas id="canvas" hidden></canvas>
 
-    <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
-    <script src="script.js"></script>
-  </body>
+<!-- OpenCV.js -->
+<script async src="https://docs.opencv.org/4.7.0/opencv.js"></script>
+<!-- PDFLib -->
+<script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+
+<script>
+let video=document.getElementById("video");
+let canvas=document.getElementById("canvas");
+let preview=document.getElementById("preview");
+let photos=[], stream=null, facingMode="environment", filterType="none";
+
+// Start camera
+async function startCamera(){
+  if(stream) stream.getTracks().forEach(t=>t.stop());
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode}});
+  video.srcObject=stream;
+}
+
+// Switch camera
+function switchCamera(){ facingMode=facingMode==="environment"?"user":"environment"; startCamera(); }
+
+// Set live filter
+function setFilter(type){ filterType=type; liveFilter(); }
+
+// Apply live filter on video
+function liveFilter(){
+  video.style.filter = filterType==="grayscale"?"grayscale(100%)":
+                       filterType==="bw"?"contrast(200%) grayscale(100%)":
+                       filterType==="bright"?"brightness(1.3)":
+                       "none";
+}
+
+// Capture photo with crop & filter
+async function takePhoto(){
+  canvas.width=video.videoWidth;
+  canvas.height=video.videoHeight;
+  const ctx=canvas.getContext("2d");
+  ctx.drawImage(video,0,0);
+
+  if(!cv||!cv.Mat){ alert("OpenCV belum siap"); return; }
+
+  let src=cv.imread(canvas);
+  let dst=new cv.Mat();
+  cv.cvtColor(src,dst,cv.COLOR_RGBA2GRAY);
+  cv.GaussianBlur(dst,dst,new cv.Size(5,5),0);
+  cv.Canny(dst,dst,75,200);
+
+  let contours=new cv.MatVector();
+  let hierarchy=new cv.Mat();
+  cv.findContours(dst,contours,hierarchy,cv.RETR_EXTERNAL,cv.CHAIN_APPROX_SIMPLE);
+
+  let maxArea=0, maxCnt=null;
+  for(let i=0;i<contours.size();i++){ let cnt=contours.get(i); let area=cv.contourArea(cnt); if(area>maxArea){maxArea=area; maxCnt=cnt;} }
+
+  if(maxCnt){
+    let peri=cv.arcLength(maxCnt,true);
+    let approx=new cv.Mat();
+    cv.approxPolyDP(maxCnt,approx,0.02*peri,true);
+    if(approx.rows===4){
+      let pts=[]; for(let i=0;i<4;i++){ pts.push({x:approx.data32S[i*2],y:approx.data32S[i*2+1]}); }
+      pts.sort((a,b)=>a.y-b.y);
+      let tl=pts[0], tr=pts[1], bl=pts[2], br=pts[3];
+      let width=Math.max(distance(tl,tr),distance(bl,br));
+      let height=Math.max(distance(tl,bl),distance(tr,br));
+      let srcTri=cv.matFromArray(4,1,cv.CV_32FC2,[tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y]);
+      let dstTri=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,width,0,width,height,0,height]);
+      let M=cv.getPerspectiveTransform(srcTri,dstTri);
+      let warped=new cv.Mat();
+      cv.warpPerspective(src,warped,M,new cv.Size(width,height));
+      cv.imshow(canvas,warped);
+      srcTri.delete(); dstTri.delete(); M.delete(); warped.delete();
+    }
+    approx.delete();
+  }
+
+  applyFilterCanvas();
+  photos.push(canvas.toDataURL("image/jpeg",1.0));
+  renderPreview();
+
+  src.delete(); dst.delete(); contours.delete(); hierarchy.delete();
+}
+
+function distance(p1,p2){ return Math.hypot(p1.x-p2.x,p1.y-p2.y); }
+
+function applyFilterCanvas(){
+  const ctx=canvas.getContext("2d");
+  let imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+  let d=imgData.data;
+  for(let i=0;i<d.length;i+=4){
+    let r=d[i],g=d[i+1],b=d[i+2]; let avg=(r+g+b)/3;
+    if(filterType==="grayscale"){ d[i]=d[i+1]=d[i+2]=avg; }
+    else if(filterType==="bw"){ let val=avg>128?255:0; d[i]=d[i+1]=d[i+2]=val; }
+    else if(filterType==="bright"){ d[i]=Math.min(255,r*1.3); d[i+1]=Math.min(255,g*1.3); d[i+2]=Math.min(255,b*1.3); }
+  }
+  ctx.putImageData(imgData,0,0);
+}
+
+// Render preview + drag + hapus
+function renderPreview(){
+  preview.innerHTML="";
+  photos.forEach((src,index)=>{
+    const card=document.createElement("div"); card.className="card"; card.draggable=true;
+    const img=document.createElement("img"); img.src=src;
+    img.ondragstart=e=>{ e.dataTransfer.setData("text/plain",index); }
+    card.appendChild(img);
+    const del=document.createElement("button"); del.innerText="✖"; del.onclick=()=>{ photos.splice(index,1); renderPreview(); };
+    card.appendChild(del);
+    preview.appendChild(card);
+  });
+}
+
+// Drag & drop reorder
+preview.ondragover=e=>e.preventDefault();
+preview.ondrop=e=>{
+  e.preventDefault();
+  const oldIndex=parseInt(e.dataTransfer.getData("text/plain"));
+  const targetIndex=[...preview.children].indexOf(e.target.closest(".card"));
+  if(targetIndex===-1||oldIndex===targetIndex) return;
+  const [moved]=photos.splice(oldIndex,1);
+  photos.splice(targetIndex,0,moved);
+  renderPreview();
+}
+
+// Download PDF
+async function downloadPDF(){
+  if(photos.length===0){ alert("Belum ada halaman"); return; }
+  const { PDFDocument }=PDFLib;
+  const pdf=await PDFDocument.create();
+  for(let photo of photos){
+    const bytes=await fetch(photo).then(r=>r.arrayBuffer());
+    const img=await pdf.embedJpg(bytes);
+    const page=pdf.addPage([img.width,img.height]);
+    page.drawImage(img,{x:0,y:0,width:img.width,height:img.height});
+  }
+  const pdfBytes=await pdf.save();
+  const blob=new Blob([pdfBytes],{type:"application/pdf"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="scan.pdf"; a.click();
+}
+
+// Start camera & live filter
+startCamera().then(liveFilter);
+</script>
+
+</body>
 </html>
